@@ -44,8 +44,14 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
+
+cl::opt<std::string> TargetsFile(
+    "targets",
+    cl::desc("Input file containing the target lines of code."),
+    cl::value_desc("targets"));
 
 namespace {
 
@@ -184,9 +190,8 @@ static void registerAFLPass(const PassManagerBuilder &,
 
 }
 
-
-static RegisterStandardPasses RegisterAFLPass(
-    PassManagerBuilder::EP_ModuleOptimizerEarly, registerAFLPass);
+static RegisterStandardPasses RegisterAFLPassLTO(
+    PassManagerBuilder::EP_FullLinkTimeOptimizationLast, registerAFLPass);
 
 static RegisterStandardPasses RegisterAFLPass0(
     PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
