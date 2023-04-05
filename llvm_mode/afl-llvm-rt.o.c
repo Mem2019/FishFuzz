@@ -59,6 +59,15 @@
 
 u8  __afl_area_initial[MAP_SIZE];
 u8* __afl_area_ptr = __afl_area_initial;
+extern const u32 __fish_num_targets;
+
+u8* __fish_tr_ptr;
+u8* __fish_tr_ptr_bak;
+u8* __fish_tr_ptr_shm;
+
+u64* __fish_dist_ptr;
+u64* __fish_dist_ptr_bak;
+u64* __fish_dist_ptr_shm;
 
 __thread u32 __afl_prev_loc;
 
@@ -67,12 +76,27 @@ __thread u32 __afl_prev_loc;
 
 static u8 is_persistent;
 
+static inline void* my_mmap(size_t size) {
+  const size_t kPageSize = sysconf(_SC_PAGESIZE);
+  size = ((size + kPageSize - 1) / kPageSize) * kPageSize;
+  return mmap(NULL, size,
+    PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+
+static inline void switch_to_shm(void) {
+
+  __fish_dist_ptr = __fish_dist_ptr_shm;
+  __fish_tr_ptr = __fish_tr_ptr_shm;
+
+}
 
 /* SHM setup. */
 
 static void __afl_map_shm(void) {
 
   u8 *id_str = getenv(SHM_ENV_VAR);
+  u8 *dist_str = getenv(SHM_DIST_ENV_VAR);
+  u8 *tr_str = getenv(SHM_TR_ENV_VAR);
 
   /* If we're running under AFL, attach to the appropriate region, replacing the
      early-stage __afl_area_initial region that is needed to allow some really
@@ -92,6 +116,28 @@ static void __afl_map_shm(void) {
        our parent doesn't give up on us. */
 
     __afl_area_ptr[0] = 1;
+
+  }
+
+  if (dist_str) {
+
+    __fish_dist_ptr_shm = shmat(atoi(dist_str), NULL, 0);
+    if (__fish_dist_ptr_shm == (void *)-1) _exit(1);
+
+  } else {
+
+    __fish_dist_ptr_shm = __fish_dist_ptr_bak;
+
+  }
+
+  if (tr_str) {
+
+    __fish_tr_ptr_shm = shmat(atoi(tr_str), NULL, 0);
+    if (__fish_tr_ptr_shm == (void *)-1) _exit(1);
+
+  } else {
+
+    __fish_tr_ptr_shm = __fish_tr_ptr_bak;
 
   }
 
@@ -143,6 +189,10 @@ static void __afl_start_forkserver(void) {
 
         close(FORKSRV_FD);
         close(FORKSRV_FD + 1);
+
+        // if not persistent mode, we need to switch to shared memory
+        if (!is_persistent)
+          switch_to_shm();
         return;
   
       }
@@ -198,6 +248,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
       memset(__afl_area_ptr, 0, MAP_SIZE);
       __afl_area_ptr[0] = 1;
       __afl_prev_loc = 0;
+      switch_to_shm();
     }
 
     cycle_cnt  = max_cnt;
@@ -215,6 +266,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
       __afl_area_ptr[0] = 1;
       __afl_prev_loc = 0;
 
+      switch_to_shm();
       return 1;
 
     } else {
@@ -224,6 +276,8 @@ int __afl_persistent_loop(unsigned int max_cnt) {
          dummy output region. */
 
       __afl_area_ptr = __afl_area_initial;
+      __fish_dist_ptr = __fish_dist_ptr_bak;
+      __fish_tr_ptr = __fish_tr_ptr_bak;
 
     }
 
@@ -257,6 +311,11 @@ void __afl_manual_init(void) {
 __attribute__((constructor(CONST_PRIO))) void __afl_auto_init(void) {
 
   is_persistent = !!getenv(PERSIST_ENV_VAR);
+
+  size_t nt = __fish_num_targets;
+  __fish_dist_ptr = __fish_dist_ptr_bak = my_mmap(sizeof(u64) * nt);
+  __fish_tr_ptr = __fish_tr_ptr_bak = my_mmap(sizeof(u8) * nt);
+  memset(__fish_dist_ptr, 0xff, sizeof(u64) * nt);
 
   if (getenv(DEFER_ENV_VAR)) return;
 
@@ -310,5 +369,18 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
     start++;
 
   }
+
+}
+
+void fish_target_inst(u32 target) {
+
+  __fish_tr_ptr[target] = 1;
+
+}
+
+void fish_func_inst(u32 target, u64 dist) {
+
+  if (dist < __fish_dist_ptr[target])
+    __fish_dist_ptr[target] = dist;
 
 }
