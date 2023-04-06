@@ -154,9 +154,9 @@ EXP_ST u64* trace_dists;              /* SHM to trace dists of targets    */
 static u64* min_dists;                /* Minimum distances among corpus   */
 static struct queue_entry** min_seeds;/* Seed that has the min distance   */
 
-static u8* reached_targets;           /* Targets reached by corpus        */
 static u64* target_freq;              /* Frequency of each target         */
-static struct queue_entry** to_target;/* Fastest seed that reaches each t */
+static struct queue_entry** reached_targets;
+/* Fastest seed that reaches each t */
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -1320,11 +1320,10 @@ static void update_fish_seed(struct queue_entry* q) {
     }
 
     // Update best seed that reaches each target.
-    if (trace_targets[i]) {
-      reached_targets[i] = 1;
-      if (to_target[i] == NULL || q->exec_us < to_target[i]->exec_us)
-        to_target[i] = q;
-    }
+    if (trace_targets[i] &&
+      (reached_targets[i] == NULL || q->exec_us < reached_targets[i]->exec_us))
+      reached_targets[i] = q;
+
   }
 
 }
@@ -1400,7 +1399,7 @@ static void cull_queue_explore(void) {
 
   for (size_t i = 0; i < num_targets; ++i) {
 
-    if (min_dists[i] != 0) // f.unexplored
+    if (min_dists[i] > 0) // f.unexplored
       min_seeds[i]->favored = 1;
 
   }
@@ -1434,7 +1433,7 @@ static void cull_queue_exploit(void) {
 
   for (size_t i = 0; i < num_targets; ++i) {
 
-    if (reached_targets[i]) {
+    if (reached_targets[i] != NULL) {
       trgs_to_visit[num_trgs_to_visit].target = i;
       trgs_to_visit[num_trgs_to_visit].freq = target_freq[i];
       ++num_trgs_to_visit;
@@ -1448,9 +1447,11 @@ static void cull_queue_exploit(void) {
 
   for (size_t i = 0; i < threshold; ++i) {
 
-    to_target[trgs_to_visit[i].target]->favored = 1;
+    reached_targets[trgs_to_visit[i].target]->favored = 1;
 
   }
+
+  ck_free(trgs_to_visit);
 
 }
 
@@ -1507,8 +1508,7 @@ EXP_ST void setup_fish_shm(void) {
   min_dists = ck_alloc_nozero(num_targets * sizeof(u64));
   init_dists(min_dists);
   min_seeds = ck_alloc(num_targets * sizeof(struct queue_entry*));
-  to_target = ck_alloc(num_targets * sizeof(struct queue_entry*));
-  reached_targets = ck_alloc(num_targets);
+  reached_targets = ck_alloc(num_targets * sizeof(struct queue_entry*));
   target_freq = ck_alloc(num_targets * sizeof(u64));
 
   if (tr_id < 0 || dist_id < 0) PFATAL("shmget() failed");
@@ -4794,6 +4794,10 @@ EXP_ST u8 common_fuzz_stuff(char** argv, u8* out_buf, u32 len) {
   write_to_testcase(out_buf, len);
 
   fault = run_target(argv, exec_tmout);
+  for (size_t i = 0; i < num_targets; ++i) {
+    if (trace_targets[i])
+      ++target_freq[i];
+  }
 
   if (stop_soon) return 1;
 
