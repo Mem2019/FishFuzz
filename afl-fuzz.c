@@ -241,6 +241,7 @@ static u64 total_bitmap_size,         /* Total bit count for all bitmaps  */
 static s32 cpu_core_count;            /* CPU core count                   */
 
 static u64 num_targets, num_funcs;
+static u64 num_reached_targets, num_reached_funcs;
 
 #ifdef HAVE_AFFINITY
 
@@ -1331,8 +1332,11 @@ static void update_fish_seed(struct queue_entry* q) {
     if (trace_targets[i]) {
 
       // When a new target is reached, we reset time of intra-explore phase.
-      if (reached_targets[i] == NULL && cur_state == kIntraExplore)
-        state_start_time = get_cur_time();
+      if (reached_targets[i] == NULL) {
+        ++num_reached_targets;
+        if (cur_state == kIntraExplore)
+          state_start_time = get_cur_time();
+      }
 
       if (reached_targets[i] == NULL || q->exec_us < reached_targets[i]->exec_us)
         reached_targets[i] = q;
@@ -1346,6 +1350,7 @@ static void update_fish_seed(struct queue_entry* q) {
     // If a new function is reached by a seed, we reset to inter-explore phase.
     if (trace_funcs[i] && !reached_funcs[i]) {
 
+      ++num_reached_funcs;
       reached_funcs[i] = 1;
       cur_state = kInterExplore;
       state_start_time = get_cur_time();
@@ -1518,6 +1523,7 @@ static void cull_queue(void) {
     case kIntraExplore: return cull_queue_old();
     case kInterExplore: return cull_queue_explore();
     case kExploit: return cull_queue_exploit();
+    default: abort();
   }
 
 }
@@ -4461,22 +4467,22 @@ static void show_stats(void) {
   SAYF(bVR bH cCYA bSTOP " fuzzing strategy yields " bSTG bH10 bH bHT bH10
        bH5 bHB bH bSTOP cCYA " path geometry " bSTG bH5 bH2 bH bVL "\n");
 
-  if (skip_deterministic) {
-
-    strcpy(tmp, "n/a, n/a, n/a");
-
-  } else {
-
-    sprintf(tmp, "%s/%s, %s/%s, %s/%s",
-            DI(stage_finds[STAGE_FLIP1]), DI(stage_cycles[STAGE_FLIP1]),
-            DI(stage_finds[STAGE_FLIP2]), DI(stage_cycles[STAGE_FLIP2]),
-            DI(stage_finds[STAGE_FLIP4]), DI(stage_cycles[STAGE_FLIP4]));
-
+  const char* state_name;
+  switch (cur_state) {
+    case kIntraExplore: state_name = "IntraExplore"; break;
+    case kInterExplore: state_name = "InterExplore"; break;
+    case kExploit: state_name = "Exploit"; break;
+    default: abort();
   }
 
-  SAYF(bV bSTOP "   bit flips : " cRST "%-37s " bSTG bV bSTOP "    levels : "
+  sprintf(tmp, "%llu/%llu, %llu/%llu, %s",
+            num_reached_targets, num_targets,
+            num_reached_funcs, num_funcs, state_name);
+
+  SAYF(bV bSTOP "    FishFuzz : " cRST "%-37s " bSTG bV bSTOP "    levels : "
        cRST "%-10s " bSTG bV "\n", tmp, DI(max_depth));
 
+  tmp[0] = '\0';
   if (!skip_deterministic)
     sprintf(tmp, "%s/%s, %s/%s, %s/%s",
             DI(stage_finds[STAGE_FLIP8]), DI(stage_cycles[STAGE_FLIP8]),
