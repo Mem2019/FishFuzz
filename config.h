@@ -279,6 +279,7 @@
 #define SHM_ENV_VAR         "__AFL_SHM_ID"
 #define SHM_DIST_ENV_VAR    "__AFL_DIST_SHM_ID"
 #define SHM_TR_ENV_VAR      "__AFL_TARGET_REACH_SHM_ID"
+#define SHM_F_ENV_VAR       "__AFL_FUNC_SHM_ID"
 
 /* Other less interesting, internal-only variables. */
 
@@ -292,6 +293,7 @@
 #define PERSIST_SIG         "##SIG_AFL_PERSISTENT##"
 #define DEFER_SIG           "##SIG_AFL_DEFER_FORKSRV##"
 #define NUM_TARGETS_SIG     "##FISH_NUM_TARGETS##="
+#define NUM_FUNCS_SIG       "##FISH_NUM_FUNCS##="
 
 /* Distinctive bitmap signature used to indicate failed execution: */
 

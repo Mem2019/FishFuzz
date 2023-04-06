@@ -150,6 +150,7 @@ static s32 forksrv_pid,               /* PID of the fork server           */
 EXP_ST u8* trace_bits;                /* SHM with instrumentation bitmap  */
 EXP_ST u8* trace_targets;             /* SHM to trace target reach info   */
 EXP_ST u64* trace_dists;              /* SHM to trace dists of targets    */
+EXP_ST u8* trace_funcs;               /* SHM to trace reached functions   */
 
 static u64* min_dists;                /* Minimum distances among corpus   */
 static struct queue_entry** min_seeds;/* Seed that has the min distance   */
@@ -157,6 +158,7 @@ static struct queue_entry** min_seeds;/* Seed that has the min distance   */
 static u64* target_freq;              /* Frequency of each target         */
 static struct queue_entry** reached_targets;
 /* Fastest seed that reaches each t */
+static u8* reached_funcs;        /* All functions being reached in corpus */
 
 EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
            virgin_tmout[MAP_SIZE],    /* Bits we haven't seen in tmouts   */
@@ -164,7 +166,7 @@ EXP_ST u8  virgin_bits[MAP_SIZE],     /* Regions yet untouched by fuzzing */
 
 static u8  var_bytes[MAP_SIZE];       /* Bytes that appear to be variable */
 
-static s32 shm_id, dist_id, tr_id;    /* ID of the SHM region             */
+static s32 shm_id, dist_id, tr_id, f_id; /* ID of the SHM region          */
 
 static volatile u8 stop_soon,         /* Ctrl-C pressed?                  */
                    clear_screen = 1,  /* Window resized?                  */
@@ -238,7 +240,7 @@ static u64 total_bitmap_size,         /* Total bit count for all bitmaps  */
 
 static s32 cpu_core_count;            /* CPU core count                   */
 
-static u64 num_targets;
+static u64 num_targets, num_funcs;
 
 #ifdef HAVE_AFFINITY
 
@@ -348,6 +350,11 @@ enum {
   /* 05 */ FAULT_NOBITS
 };
 
+static enum {
+  kIntraExplore, kInterExplore, kExploit
+} cur_state;
+
+static u64 state_start_time;
 
 /* Get unix time in milliseconds */
 
@@ -1230,6 +1237,7 @@ static void remove_shm(void) {
   shmctl(shm_id, IPC_RMID, NULL);
   shmctl(tr_id, IPC_RMID, NULL);
   shmctl(dist_id, IPC_RMID, NULL);
+  shmctl(f_id, IPC_RMID, NULL);
 
 }
 
@@ -1320,9 +1328,29 @@ static void update_fish_seed(struct queue_entry* q) {
     }
 
     // Update best seed that reaches each target.
-    if (trace_targets[i] &&
-      (reached_targets[i] == NULL || q->exec_us < reached_targets[i]->exec_us))
-      reached_targets[i] = q;
+    if (trace_targets[i]) {
+
+      // When a new target is reached, we reset time of intra-explore phase.
+      if (reached_targets[i] == NULL && cur_state == kIntraExplore)
+        state_start_time = get_cur_time();
+
+      if (reached_targets[i] == NULL || q->exec_us < reached_targets[i]->exec_us)
+        reached_targets[i] = q;
+
+    }
+
+  }
+
+  for (size_t i = 0; i < num_funcs; ++i) {
+
+    // If a new function is reached by a seed, we reset to inter-explore phase.
+    if (trace_funcs[i] && !reached_funcs[i]) {
+
+      reached_funcs[i] = 1;
+      cur_state = kInterExplore;
+      state_start_time = get_cur_time();
+
+    }
 
   }
 
@@ -1335,7 +1363,7 @@ static void update_fish_seed(struct queue_entry* q) {
    until the next run. The favored entries are given more air time during
    all fuzzing steps. */
 
-static void cull_queue(void) {
+static void cull_queue_old(void) {
 
   struct queue_entry* q;
   static u8 temp_v[MAP_SIZE >> 3];
@@ -1413,7 +1441,7 @@ struct trg_freq {
   u64 freq;
 };
 
-int cmp_trg_freq(const void* a, const void* b) {
+static int cmp_trg_freq(const void* a, const void* b) {
 
   return ((const struct trg_freq*)a)->freq - ((const struct trg_freq*)b)->freq;
 
@@ -1452,6 +1480,45 @@ static void cull_queue_exploit(void) {
   }
 
   ck_free(trgs_to_visit);
+
+}
+
+static void cull_queue(void) {
+
+  u64 cur_time = get_cur_time();
+  double time_min = (cur_time - state_start_time) / 1000.0 / 60;
+
+  switch (cur_state) {
+
+    case kIntraExplore:
+      if (time_min >= 10) {
+        cur_state = kExploit;
+        state_start_time = cur_time;
+      }
+    break;
+
+    case kInterExplore:
+      if (time_min >= 30) {
+        cur_state = kIntraExplore;
+        state_start_time = cur_time;
+      }
+    break;
+
+    case kExploit:
+      if (time_min >= 60) {
+        cur_state = kIntraExplore;
+        state_start_time = cur_time;
+      }
+    break;
+
+    default: abort();
+  }
+
+  switch (cur_state) {
+    case kIntraExplore: return cull_queue_old();
+    case kInterExplore: return cull_queue_explore();
+    case kExploit: return cull_queue_exploit();
+  }
 
 }
 
@@ -1497,37 +1564,47 @@ static void init_dists(u64* dists) {
 
 }
 
-EXP_ST void setup_fish_shm(void) {
+EXP_ST void setup_fish(void) {
 
-  u8* tr_str; u8* dist_str;
+  u8* tr_str; u8* dist_str; u8* f_str;
 
   tr_id = shmget(
     IPC_PRIVATE, num_targets * sizeof(u8), IPC_CREAT | IPC_EXCL | 0600);
   dist_id = shmget(
     IPC_PRIVATE, num_targets * sizeof(u64), IPC_CREAT | IPC_EXCL | 0600);
+  f_id = shmget(
+    IPC_PRIVATE, num_funcs, IPC_CREAT | IPC_EXCL | 0600);
+  if (tr_id < 0 || dist_id < 0 || f_id < 0) PFATAL("shmget() failed");
+
   min_dists = ck_alloc_nozero(num_targets * sizeof(u64));
   init_dists(min_dists);
   min_seeds = ck_alloc(num_targets * sizeof(struct queue_entry*));
   reached_targets = ck_alloc(num_targets * sizeof(struct queue_entry*));
   target_freq = ck_alloc(num_targets * sizeof(u64));
-
-  if (tr_id < 0 || dist_id < 0) PFATAL("shmget() failed");
+  reached_funcs = ck_alloc(num_funcs);
+  cur_state = kInterExplore;
+  state_start_time = get_cur_time();
 
   tr_str = alloc_printf("%d", tr_id);
   dist_str = alloc_printf("%d", dist_id);
+  f_str = alloc_printf("%d", f_id);
 
   if (!dumb_mode) {
     setenv(SHM_TR_ENV_VAR, tr_str, 1);
     setenv(SHM_DIST_ENV_VAR, dist_str, 1);
+    setenv(SHM_F_ENV_VAR, f_str, 1);
   }
 
   ck_free(tr_str);
   ck_free(dist_str);
+  ck_free(f_str);
 
   trace_dists = shmat(dist_id, NULL, 0);
   trace_targets = shmat(tr_id, NULL, 0);
+  trace_funcs = shmat(f_id, NULL, 0);
 
-  if (trace_dists == (void *)-1 || trace_targets == (void *)-1)
+  if (trace_dists == (void *)-1 || trace_targets == (void *)-1 ||
+    trace_funcs == (void *)-1)
     PFATAL("shmat() failed");
 }
 
@@ -2435,6 +2512,7 @@ static u8 run_target(char** argv, u32 timeout) {
   memset(trace_bits, 0, MAP_SIZE);
   init_dists(trace_dists);
   memset(trace_targets, 0, num_targets);
+  memset(trace_funcs, 0, num_funcs);
   MEM_BARRIER();
 
   /* If we're running in "dumb" mode, we can't rely on the fork server
@@ -7170,12 +7248,15 @@ EXP_ST void check_binary(u8* fname) {
 
   const char* nt_str = memmem(
     f_data, f_len, NUM_TARGETS_SIG, strlen(NUM_TARGETS_SIG));
+  const char* nf_str = memmem(
+    f_data, f_len, NUM_FUNCS_SIG, strlen(NUM_FUNCS_SIG));
 
-  if (!nt_str)
+  if (!nt_str || !nf_str)
     FATAL("Binary is not compiled from FishFuzz compiler.");
 
   num_targets = strtoull(nt_str + strlen(NUM_TARGETS_SIG), NULL, 10);
-  OKF("Number of targets is %llu.", num_targets);
+  num_funcs = strtoull(nf_str + strlen(NUM_FUNCS_SIG), NULL, 10);
+  OKF("Number of targets and functions is %llu and %llu", num_targets, num_funcs);
 
   if (munmap(f_data, f_len)) PFATAL("unmap() failed");
 
@@ -8186,7 +8267,7 @@ int main(int argc, char** argv) {
   if (!out_file) setup_stdio_file();
 
   check_binary(argv[optind]);
-  setup_fish_shm();
+  setup_fish();
 
   start_time = get_cur_time();
 

@@ -60,10 +60,15 @@
 u8  __afl_area_initial[MAP_SIZE];
 u8* __afl_area_ptr = __afl_area_initial;
 extern const u32 __fish_num_targets;
+extern const u64 __fish_num_funcs;
 
 u8* __fish_tr_ptr;
 u8* __fish_tr_ptr_bak;
 u8* __fish_tr_ptr_shm;
+
+u8* __fish_f_ptr;
+u8* __fish_f_ptr_bak;
+u8* __fish_f_ptr_shm;
 
 u64* __fish_dist_ptr;
 u64* __fish_dist_ptr_bak;
@@ -87,6 +92,7 @@ static inline void switch_to_shm(void) {
 
   __fish_dist_ptr = __fish_dist_ptr_shm;
   __fish_tr_ptr = __fish_tr_ptr_shm;
+  __fish_f_ptr = __fish_f_ptr_shm;
 
 }
 
@@ -97,6 +103,7 @@ static void __afl_map_shm(void) {
   u8 *id_str = getenv(SHM_ENV_VAR);
   u8 *dist_str = getenv(SHM_DIST_ENV_VAR);
   u8 *tr_str = getenv(SHM_TR_ENV_VAR);
+  u8 *f_str = getenv(SHM_F_ENV_VAR);
 
   /* If we're running under AFL, attach to the appropriate region, replacing the
      early-stage __afl_area_initial region that is needed to allow some really
@@ -138,6 +145,17 @@ static void __afl_map_shm(void) {
   } else {
 
     __fish_tr_ptr_shm = __fish_tr_ptr_bak;
+
+  }
+
+  if (f_str) {
+
+    __fish_f_ptr_shm = shmat(atoi(f_str), NULL, 0);
+    if (__fish_f_ptr_shm == (void *)-1) _exit(1);
+
+  } else {
+
+    __fish_f_ptr_shm = __fish_f_ptr_bak;
 
   }
 
@@ -278,6 +296,7 @@ int __afl_persistent_loop(unsigned int max_cnt) {
       __afl_area_ptr = __afl_area_initial;
       __fish_dist_ptr = __fish_dist_ptr_bak;
       __fish_tr_ptr = __fish_tr_ptr_bak;
+      __fish_f_ptr = __fish_f_ptr_bak;
 
     }
 
@@ -315,6 +334,7 @@ __attribute__((constructor(CONST_PRIO))) void __afl_auto_init(void) {
   size_t nt = __fish_num_targets;
   __fish_dist_ptr = __fish_dist_ptr_bak = my_mmap(sizeof(u64) * nt);
   __fish_tr_ptr = __fish_tr_ptr_bak = my_mmap(sizeof(u8) * nt);
+  __fish_f_ptr = __fish_f_ptr_bak = my_mmap(__fish_num_funcs);
   memset(__fish_dist_ptr, 0xff, sizeof(u64) * nt);
 
   if (getenv(DEFER_ENV_VAR)) return;
@@ -382,5 +402,11 @@ void fish_func_inst(u32 target, u64 dist) {
 
   if (dist < __fish_dist_ptr[target])
     __fish_dist_ptr[target] = dist;
+
+}
+
+void fish_each_func_inst(u64 func) {
+
+  __fish_f_ptr[func] = 1;
 
 }

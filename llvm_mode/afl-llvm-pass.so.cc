@@ -435,8 +435,22 @@ bool AFLCoverage::runOnModule(Module &M) {
   /* Instrument all the things! */
 
   int inst_blocks = 0;
+  size_t num_funcs = 0;
 
-  for (auto &F : M)
+  for (auto &F : M) {
+
+    if (F.begin() == F.end())
+      continue;
+
+    {
+      IRBuilder<> IRB(&(*F.getEntryBlock().getFirstInsertionPt()));
+      ConstantInt* FuncID = ConstantInt::get(Int64Ty, num_funcs++);
+      Type *Args[] = {Int64Ty};
+      FunctionType *FTy = FunctionType::get(Type::getVoidTy(C), Args, false);
+      IRB.CreateCall(
+        M.getOrInsertFunction("fish_each_func_inst", FTy), {FuncID});
+    }
+
     for (auto &BB : F) {
 
       BasicBlock::iterator IP = BB.getFirstInsertionPt();
@@ -480,6 +494,7 @@ bool AFLCoverage::runOnModule(Module &M) {
       inst_blocks++;
 
     }
+  }
 
   auto targets = getTargetBlocks(M);
   size_t num_targets = targets.size();
@@ -488,6 +503,9 @@ bool AFLCoverage::runOnModule(Module &M) {
   // Store the number of targets into binary for fuzzer and execution to know it.
   new GlobalVariable(M, Int32Ty, true, GlobalValue::ExternalLinkage,
     ConstantInt::get(Int32Ty, num_targets), "__fish_num_targets");
+  new GlobalVariable(M, Int64Ty, true, GlobalValue::ExternalLinkage,
+    ConstantInt::get(Int64Ty, num_funcs), "__fish_num_funcs");
+
   char buf[64];
   int r = snprintf(buf, sizeof(buf), NUM_TARGETS_SIG"%lu", num_targets);
   if (r <= 0 || r >= sizeof(buf))
@@ -495,6 +513,12 @@ bool AFLCoverage::runOnModule(Module &M) {
   new GlobalVariable(M, ArrayType::get(Int8Ty, r + 1),
     true, GlobalValue::ExternalLinkage,
     ConstantDataArray::getString(C, buf), "__fish_num_targets_str");
+  r = snprintf(buf, sizeof(buf), NUM_FUNCS_SIG"%lu", num_funcs);
+  if (r <= 0 || r >= sizeof(buf))
+    FATAL("snprintf error");
+  new GlobalVariable(M, ArrayType::get(Int8Ty, r + 1),
+    true, GlobalValue::ExternalLinkage,
+    ConstantDataArray::getString(C, buf), "__fish_num_funcs_str");
 
   // For each target basic block, we call `fish_target_inst(target_id)`.
   for (size_t t = 0; t < num_targets; ++t) {
