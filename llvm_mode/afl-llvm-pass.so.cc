@@ -489,7 +489,7 @@ bool AFLCoverage::runOnModule(Module &M) {
   new GlobalVariable(M, Int32Ty, true, GlobalValue::ExternalLinkage,
     ConstantInt::get(Int32Ty, num_targets), "__fish_num_targets");
   char buf[64];
-  int r = snprintf(buf, sizeof(buf), "FISH_NUM_TARGETS=%lu", num_targets);
+  int r = snprintf(buf, sizeof(buf), NUM_TARGETS_SIG"%lu", num_targets);
   if (r <= 0 || r >= sizeof(buf))
     FATAL("snprintf error");
   new GlobalVariable(M, ArrayType::get(Int8Ty, r + 1),

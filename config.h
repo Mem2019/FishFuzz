@@ -291,6 +291,7 @@
 
 #define PERSIST_SIG         "##SIG_AFL_PERSISTENT##"
 #define DEFER_SIG           "##SIG_AFL_DEFER_FORKSRV##"
+#define NUM_TARGETS_SIG     "##FISH_NUM_TARGETS##="
 
 /* Distinctive bitmap signature used to indicate failed execution: */
 
