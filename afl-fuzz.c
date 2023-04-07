@@ -251,6 +251,8 @@ static s32 cpu_aff = -1;       	      /* Selected CPU core                */
 
 static FILE* plot_file;               /* Gnuplot output file              */
 
+static u8 fish_log;                   /* If log is enabled                */
+
 struct queue_entry {
 
   u8* fname;                          /* File name for the test case      */
@@ -274,8 +276,6 @@ struct queue_entry {
 
   u8* trace_mini;                     /* Trace bytes, if kept             */
   u32 tc_ref;                         /* Trace bytes ref count            */
-
-  u64* distances;
 
   struct queue_entry *next,           /* Next element, if any             */
                      *next_100;       /* 100 elements ahead               */
@@ -356,6 +356,17 @@ static enum {
 } cur_state;
 
 static u64 state_start_time;
+
+static inline const char* cur_state_name() {
+
+  switch (cur_state) {
+    case kIntraExplore: return "IntraExplore";
+    case kInterExplore: return "InterExplore";
+    case kExploit: return "Exploit";
+    default: abort();
+  }
+
+}
 
 /* Get unix time in milliseconds */
 
@@ -1359,6 +1370,33 @@ static void update_fish_seed(struct queue_entry* q) {
 
   }
 
+  if (fish_log) {
+
+    // Upon new seed, we record (potentially) newly updated min distances.
+    u8* buf = alloc_printf("%s/min_dists.txt", out_dir);
+    FILE* fd = fopen(buf, "w");
+    if (fd == NULL) FATAL("fopen(\"min_dists.txt\")");
+    ck_free(buf);
+    for (size_t i = 0; i < num_targets; ++i) {
+      if (min_dists[i] != MAX_DIST_VAL)
+        fprintf(fd, "%lu | %llu | %s\n", i, min_dists[i], min_seeds[i]->fname);
+    }
+    fclose(fd);
+
+    // In addition, we also record reached targets.
+    buf = alloc_printf("%s/reached_targets.txt", out_dir);
+    fd = fopen(buf, "w");
+    if (fd == NULL) FATAL("fopen(\"reached_targets.txt\")");
+    ck_free(buf);
+    for (size_t i = 0; i < num_targets; ++i) {
+      if (reached_targets[i] != NULL)
+        fprintf(fd, "%lu | %llu | %s\n",
+          i, target_freq[i], reached_targets[i]->fname);
+    }
+    fclose(fd);
+
+  }
+
 }
 
 
@@ -1481,6 +1519,17 @@ static void cull_queue_exploit(void) {
   for (size_t i = 0; i < threshold; ++i) {
 
     reached_targets[trgs_to_visit[i].target]->favored = 1;
+
+  }
+
+  if (fish_log) {
+
+    u8* buf = alloc_printf("%s/top_targets.txt", out_dir);
+    FILE* fd = fopen(buf, "w");
+    ck_free(buf);
+    for (size_t i = 0; i < threshold; ++i)
+      fprintf(fd, "%lu | %llu\n", trgs_to_visit[i].target, trgs_to_visit[i].freq);
+    fclose(fd);
 
   }
 
@@ -1612,6 +1661,8 @@ EXP_ST void setup_fish(void) {
   if (trace_dists == (void *)-1 || trace_targets == (void *)-1 ||
     trace_funcs == (void *)-1)
     PFATAL("shmat() failed");
+
+  fish_log = getenv("FISH_LOG") != NULL;
 }
 
 /* Load postprocessor, if available. */
@@ -4467,17 +4518,9 @@ static void show_stats(void) {
   SAYF(bVR bH cCYA bSTOP " fuzzing strategy yields " bSTG bH10 bH bHT bH10
        bH5 bHB bH bSTOP cCYA " path geometry " bSTG bH5 bH2 bH bVL "\n");
 
-  const char* state_name;
-  switch (cur_state) {
-    case kIntraExplore: state_name = "IntraExplore"; break;
-    case kInterExplore: state_name = "InterExplore"; break;
-    case kExploit: state_name = "Exploit"; break;
-    default: abort();
-  }
-
   sprintf(tmp, "%llu/%llu, %llu/%llu, %s",
             num_reached_targets, num_targets,
-            num_reached_funcs, num_funcs, state_name);
+            num_reached_funcs, num_funcs, cur_state_name());
 
   SAYF(bV bSTOP "    FishFuzz : " cRST "%-37s " bSTG bV bSTOP "    levels : "
        cRST "%-10s " bSTG bV "\n", tmp, DI(max_depth));
@@ -5272,8 +5315,11 @@ static u8 fuzz_one(char** argv) {
 #endif /* ^IGNORE_FINDS */
 
   if (not_on_tty) {
-    ACTF("Fuzzing test case #%u (%u total, %llu uniq crashes found)...",
-         current_entry, queued_paths, unique_crashes);
+    ACTF("Fuzzing test case #%u (%u total, %llu uniq crashes found, "
+          "%llu/%llu, %llu/%llu, %s)...",
+         current_entry, queued_paths, unique_crashes,
+         num_reached_targets, num_targets,
+         num_reached_funcs, num_funcs, cur_state_name());
     fflush(stdout);
   }
 
