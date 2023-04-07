@@ -1463,6 +1463,8 @@ static void cull_queue_old(void) {
 static void cull_queue_explore(void) {
 
   struct queue_entry* q = queue;
+  queued_favored  = 0;
+  pending_favored = 0;
   while (q) {
     q->favored = 0;
     q = q->next;
@@ -1470,9 +1472,18 @@ static void cull_queue_explore(void) {
 
   for (size_t i = 0; i < num_targets; ++i) {
 
-    if (min_dists[i] > 0) // f.unexplored
+    if (min_dists[i] > 0) { // f.unexplored
       min_seeds[i]->favored = 1;
+      queued_favored++;
+      if (!min_seeds[i]->was_fuzzed) pending_favored++;
+    }
 
+  }
+
+  q = queue;
+  while (q) {
+    mark_as_redundant(q, !q->favored);
+    q = q->next;
   }
 
 }
@@ -1493,6 +1504,8 @@ static int cmp_trg_freq(const void* a, const void* b) {
 static void cull_queue_exploit(void) {
 
   struct queue_entry* q = queue;
+  queued_favored  = 0;
+  pending_favored = 0;
   while (q) {
     q->favored = 0;
     q = q->next;
@@ -1519,6 +1532,9 @@ static void cull_queue_exploit(void) {
   for (size_t i = 0; i < threshold; ++i) {
 
     reached_targets[trgs_to_visit[i].target]->favored = 1;
+    queued_favored++;
+    if (!reached_targets[trgs_to_visit[i].target]->was_fuzzed)
+      pending_favored++;
 
   }
 
@@ -1534,6 +1550,12 @@ static void cull_queue_exploit(void) {
   }
 
   ck_free(trgs_to_visit);
+
+  q = queue;
+  while (q) {
+    mark_as_redundant(q, !q->favored);
+    q = q->next;
+  }
 
 }
 
