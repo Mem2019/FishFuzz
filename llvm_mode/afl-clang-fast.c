@@ -326,7 +326,7 @@ static void edit_params(u32 argc, char** argv) {
     cc_params[cc_par_cnt++] = "none";
   }
 
-  cc_params[cc_par_cnt++] = "-fuse-ld="AFL_REAL_LD;
+  cc_params[cc_par_cnt++] = "--ld-path="AFL_REAL_LD;
   cc_params[cc_par_cnt++] = alloc_printf(
     "-Wl,-mllvm=-load=%s/afl-llvm-pass.so", obj_path);
   char* targets = getenv("FISH_TARGETS");
