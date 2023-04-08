@@ -407,6 +407,7 @@ void fish_func_inst(u32 target, u64 dist) {
 
 void fish_each_func_inst(u64 func) {
 
+  if (__fish_f_ptr == NULL) return;
   __fish_f_ptr[func] = 1;
 
 }
