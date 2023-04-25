@@ -394,12 +394,14 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
 
 void fish_target_inst(u32 target) {
 
+  if (__fish_tr_ptr == NULL) return;
   __fish_tr_ptr[target] = 1;
 
 }
 
 void fish_func_inst(u32 target, u64 dist) {
 
+  if (__fish_dist_ptr == NULL) return;
   if (dist < __fish_dist_ptr[target])
     __fish_dist_ptr[target] = dist;
 
